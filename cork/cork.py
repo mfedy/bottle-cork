@@ -45,6 +45,9 @@ import re
 import shutil
 import uuid
 
+from couchbase.client import Couchbase
+from couchbase.exception import MemcachedError
+
 try:
     import json
 except ImportError:  # pragma: no cover
@@ -53,6 +56,7 @@ except ImportError:  # pragma: no cover
 
 log = getLogger(__name__)
 
+COUCHBASE_ENTRY_VIEW = "_design/dev_test/_view/all_keys"
 
 class AAAException(Exception):
     """Generic Authentication/Authorization Exception"""
@@ -63,116 +67,148 @@ class AuthException(AAAException):
     """Authentication Exception: incorrect username/password pair"""
     pass
 
-
-class JsonBackend(object):
-
-    def __init__(self, directory, users_fname='users',
-            roles_fname='roles', pending_reg_fname='register', initialize=False):
-        """Data storage class. Handles JSON files
-
-        :param users_fname: users file name (without .json)
-        :type users_fname: str.
-        :param roles_fname: roless file name (without .json)
-        :type roles_fname: str.
-        :param pending_reg_fnames: pending registrations file name (without .json)
-        :type pending_reg_fname: str.
-        :param initialize: create empty JSON files (defaults to False)
-        :type initialize: bool.
+class CouchbaseTable(dict):
+    def __init__(self, client, table_name):
+        """ Wrapper class to manage a table of couchbase entries
+        
+        :param client: couchbase client
+        :type client: couchbase.Bucket
+        :param table_name: the name (aka prefix) of the table entries
+        :type table_name: str.
         """
-        assert directory, "Directory name must be valid"
-        self._directory = directory
-        self.users = {}
-        self._users_fname = users_fname
-        self.roles = {}
-        self._roles_fname = roles_fname
-        self._mtimes = {}
-        self._pending_reg_fname = pending_reg_fname
-        self.pending_registrations = {}
-        if initialize:
-            self._initialize_storage()
-        self._refresh()  # load users and roles
+        self.client = client
+        self.table_name = table_name
+        
+    def _get_entry_key(self, item):
+        return "%s:%s" % (self.table_name, item)
+        
+    def __contains__(self, item):
+        try:
+            _, _, value = self.client.get(self._get_entry_key(item))
+        except MemcachedError:
+            return False
 
-    def _initialize_storage(self):
-        """Create empty JSON files"""
-        self._savejson(self._users_fname, {})
-        self._savejson(self._roles_fname, {})
-        self._savejson(self._pending_reg_fname, {})
+        return value is not None
+    
+    def __getitem__(self, item):
+        try:
+            _, _, value = self.client.get(self._get_entry_key(item))
+        except MemcachedError, e:
+            raise KeyError()
 
-    def _refresh(self):
-        """Load users and roles from JSON files, if needed"""
-        self._loadjson(self._users_fname, self.users)
-        self._loadjson(self._roles_fname, self.roles)
-        self._loadjson(self._pending_reg_fname, self.pending_registrations)
+        return json.loads(value)
+    
+    def __setitem__(self, key, value):
+        try:
+            self.client.set(self._get_entry_key(key), 0, 0, json.dumps(value))
+        except:
+            pass
+            
+    def __delitem__(self, item):
+        try:
+            self.client.delete(self._get_entry_key(item))
+        except MemcachedError:
+            pass
+            
+    def pop(self, item):
+        try:
+            _, _, value = self.client.get(self._get_entry_key(item))
+            self.client.delete(self._get_entry_key(item))
+        except MemcachedError:
+            raise KeyError()
 
-    def _loadjson(self, fname, dest):
-        """Load JSON file located under self._directory, if needed
+        return json.loads(value)
 
-        :param fname: short file name (without path and .json)
-        :type fname: str.
-        :param dest: destination
-        :type dest: dict
+    def _get_keys(self):
+        values = self.client.view(COUCHBASE_ENTRY_VIEW, key=self.table_name)
+        return values
+    
+    def __iter__(self):
+        values = self._get_keys()
+        for item in values:
+            yield item["value"].__str__()
+        
+    def __len__(self):
+        values = self._get_keys()
+        return len(values)
+    
+    def items(self):
+        values = self._get_keys()
+        yield [(item["value"].__str__(), self.client.get(item["id"].__str__())[2]) for item in values]
+    
+    def iteritems(self, *args, **kwargs):
+        values = self._get_keys()
+        for item in values:
+            yield item["value"].__str__(), self.client.get(item["id"].__str__())[2]
+            
+    def keys(self):
+        values = self._get_keys()
+        yield [item["value"].__str__() for item in values]
+        
+    def iterkeys(self):
+        values = self._get_keys()
+        for item in values:
+            yield item["value"].__str__()
+            
+    def values(self):
+        values = self._get_keys()
+        yield [self.client.get(item["id"].__str__())[2] for item in values]
+        
+    def itervalues(self):
+        values = self._get_keys()
+        for item in values:
+            yield self.client.get(item["id"].__str__())[2]
+    
+class CouchbaseBackend(object):
+
+    def __init__(self, db_host='localhost',  db_password='', db_bucket='default', users_table_name='__Users',
+            roles_table_name='__Roles', pending_reg_table_name='__Register'):
+        """Data storage class. Handles JSON Docs in Couchbase
+
+        :param db_host: hostname of couchbase server to use
+        :type db_host: str.
+        :param db_password: password used to log into couchbase server
+        :type db_password: str.
+        :param db_bucket: couchbase bucket that contains the data
+        :type db_bucket: str.
+        :param users_table_name: prefix for user keys
+        :type users_table_name: str.
+        :param roles_table_name: prefix for role keys
+        :type roles_table_name: str.
+        :param pending_reg_table_name: prefix for pending registration keys
+        :type pending_reg_table_name: str.
         """
-        try:
-            fname = "%s/%s.json" % (self._directory, fname)
-            mtime = os.stat(fname).st_mtime
-
-            if self._mtimes.get(fname, 0) == mtime:
-                # no need to reload the file: the mtime has not been changed
-                return
-
-            with open(fname) as f:
-                json_data = f.read()
-        except Exception as e:
-            raise AAAException("Unable to read json file %s: %s" % (fname, e))
-
-        try:
-            json_obj = json.loads(json_data)
-            dest.clear()
-            dest.update(json_obj)
-            self._mtimes[fname] = os.stat(fname).st_mtime
-        except Exception as e:
-            raise AAAException("""Unable to parse JSON data from %s: %s
-                """ % (fname, e))
-
-    def _savejson(self, fname, obj):
-        """Save obj in JSON format in a file in self._directory"""
-        fname = "%s/%s.json" % (self._directory, fname)
-        try:
-            s = json.dumps(obj)
-            with open("%s.tmp" % fname, 'wb') as f:
-                f.write(s)
-                f.flush()
-            shutil.move("%s.tmp" % fname, fname)
-        except Exception as e:
-            raise AAAException("""Unable to save JSON file %s: %s
-                """ % (fname, e))
-
-    def _save_users(self):
-        """Save users in a JSON file"""
-        self._savejson('users', self.users)
+        client = Couchbase(db_host, db_bucket, db_password)[db_bucket]
+        self.users = CouchbaseTable(client, users_table_name)
+        self.roles = CouchbaseTable(client, roles_table_name)
+        self.pending_registrations = CouchbaseTable(client, pending_reg_table_name)
 
 
 class Cork(object):
 
-    def __init__(self, directory, email_sender=None,
-        users_fname='users', roles_fname='roles', pending_reg_fname='register',
-        initialize=False, session_domain=None, smtp_url='localhost',
-        smtp_server=None):
+    def __init__(self, email_sender=None, db_host='localhost', db_password='', db_bucket='default', 
+        users_table_name='__Users', roles_table_name='__Roles', pending_reg_table_name='__Register',
+        session_domain=None, smtp_url='localhost', smtp_server=None):
         """Auth/Authorization/Accounting class
 
-        :param directory: configuration directory
-        :type directory: str.
-        :param users_fname: users filename (without .json), defaults to 'users'
-        :type users_fname: str.
-        :param roles_fname: roles filename (without .json), defaults to 'roles'
-        :type roles_fname: str.
+        :param db_host: hostname of couchbase server to use
+        :type db_host: str.
+        :param db_password: password used to log into couchbase server
+        :type db_password: str.
+        :param db_bucket: couchbase bucket that contains the data
+        :type db_bucket: str.
+        :param users_table_name: prefix for user keys
+        :type users_table_name: str.
+        :param roles_table_name: prefix for role keys
+        :type roles_table_name: str.
+        :param pending_reg_table_name: prefix for pending registration keys
+        :type pending_reg_table_name: str.
         """
         if smtp_server:
             smtp_url = smtp_server
         self.mailer = Mailer(email_sender, smtp_url)
-        self._store = JsonBackend(directory, users_fname='users',
-            roles_fname='roles', pending_reg_fname='register',
-            initialize=initialize)
+        self._store = CouchbaseBackend(db_host, db_password, db_bucket, users_table_name, 
+                                       roles_table_name, pending_reg_table_name)
         self.password_reset_timeout = 3600 * 24
         self.session_domain = session_domain
 
@@ -286,8 +322,8 @@ class Cork(object):
         else:
             if role is not None:
                 # Any role with higher level is allowed
-                current_lvl = self._store.roles[self.current_user.role]
-                threshold_lvl = self._store.roles[role]
+                current_lvl = self._store.roles[self.current_user.role]["level"]
+                threshold_lvl = self._store.roles[role]["level"]
                 if current_lvl >= threshold_lvl:
                     return
 
@@ -315,8 +351,7 @@ class Cork(object):
             int(level)
         except ValueError:
             raise AAAException("The level must be numeric.")
-        self._store.roles[role] = level
-        self._store._savejson('roles', self._store.roles)
+        self._store.roles[role] = {"level": level}
 
     def delete_role(self, role):
         """Deleta a role.
@@ -330,7 +365,6 @@ class Cork(object):
         if role not in self._store.roles:
             raise AAAException("Nonexistent role.")
         self._store.roles.pop(role)
-        self._store._savejson(self._store._roles_fname, self._store.roles)
 
     def list_roles(self):
         """List roles.
@@ -338,7 +372,7 @@ class Cork(object):
         :returns: (role, role_level) generator (sorted by role)
         """
         for role in sorted(self._store.roles):
-            yield (role, self._store.roles[role])
+            yield (role, self._store.roles[role]["level"])
 
     def create_user(self, username, role, password, email_addr=None,
         description=None):
@@ -372,7 +406,6 @@ class Cork(object):
             'desc': description,
             'creation_date': tstamp
         }
-        self._store._save_users()
 
     def delete_user(self, username):
         """Delete a user account.
@@ -455,7 +488,7 @@ class Cork(object):
             raise AAAException("User is already existing.")
         if role not in self._store.roles:
             raise AAAException("Nonexistent role")
-        if self._store.roles[role] > max_level:
+        if self._store.roles[role]["level"] > max_level:
             raise AAAException("Unauthorized role")
 
         registration_code = uuid.uuid4().hex
@@ -480,8 +513,6 @@ class Cork(object):
             'desc': description,
             'creation_date': creation_date,
         }
-        self._store._savejson(self._store._pending_reg_fname,
-            self._store.pending_registrations)
 
 
     def validate_registration(self, registration_code):
@@ -508,7 +539,6 @@ class Cork(object):
             'desc': data['desc'],
             'creation_date': data['creation_date']
         }
-        self._store._save_users()
 
     def send_password_reset_email(self, username=None, email_addr=None,
         subject="Password reset confirmation",
@@ -682,7 +712,7 @@ class User(object):
         assert username in self._cork._store.users, "Unknown user"
         self.username = username
         self.role = self._cork._store.users[username]['role']
-        self.level = self._cork._store.roles[self.role]
+        self.level = self._cork._store.roles[self.role]["level"]
 
         if session is not None:
             try:
@@ -691,7 +721,7 @@ class User(object):
                 self.session_id = session['_id']
             except:
                 pass
-
+    
     def update(self, role=None, pwd=None, email_addr=None):
         """Update an user account data
 
@@ -706,16 +736,19 @@ class User(object):
         username = self.username
         if username not in self._cork._store.users:
             raise AAAException("User does not exist.")
+        
+        user_obj = self._cork._store.users[username]
+        
         if role is not None:
             if role not in self._cork._store.roles:
                 raise AAAException("Nonexistent role.")
-            self._cork._store.users[username]['role'] = role
+            user_obj['role'] = role
         if pwd is not None:
-            self._cork._store.users[username]['hash'] = self._cork._hash(
-                username, pwd)
+            user_obj['hash'] = self._cork._hash(username, pwd)
         if email_addr is not None:
-            self._cork._store.users[username]['email'] = email_addr
-        self._cork._store._save_users()
+            user_obj['email'] = email_addr
+            
+        self._cork._store.users[username] = user_obj
 
     def delete(self):
         """Delete user account
@@ -726,9 +759,6 @@ class User(object):
             self._cork._store.users.pop(self.username)
         except KeyError:
             raise AAAException("Nonexistent user.")
-        self._cork._store._save_users()
-
-
 
 class Mailer(object):
 
