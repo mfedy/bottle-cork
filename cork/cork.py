@@ -259,7 +259,7 @@ class Cork(object):
         except:
             bottle.redirect(fail_redirect)
 
-    def require(self, username=None, role=None, fixed_role=False,
+    def require(self, username=None, company=None, role=None, fixed_role=False,
         fail_redirect=None):
         """Ensure the user is logged in has the required role (or higher).
         Optionally redirect the user to another page (tipically /login)
@@ -307,6 +307,14 @@ class Cork(object):
                 if fail_redirect is None:
                     raise AuthException("""Unauthorized access: incorrect
                         username""")
+                else:
+                    bottle.redirect(fail_redirect)
+                    
+        if company is not None and cu.level < 200:
+            if cu.info["company"] != company:
+                if fail_redirect is None:
+                    raise AuthException("""Unauthorized access: user is not
+                        associated with company""")
                 else:
                     bottle.redirect(fail_redirect)
 
@@ -374,8 +382,8 @@ class Cork(object):
         for role in sorted(self._store.roles):
             yield (role, self._store.roles[role]["level"])
 
-    def create_user(self, username, role, password, email_addr=None,
-        description=None):
+    def create_user(self, username, role, password, company, email_addr=None,
+        permissions={}):
         """Create a new user account.
         This method is available to users with level>=100
 
@@ -387,23 +395,27 @@ class Cork(object):
         :type password: str.
         :param email_addr: email address (optional)
         :type email_addr: str.
-        :param description: description (free form)
-        :type description: str.
+        :param permissions: this is the list of granted permissions of the user
+        :type permissions: dict
         :raises: AuthException on errors
         """
         assert username, "Username must be provided."
+        assert company, "Company must be provided."
+        assert isinstance(permissions, dict), "Permissions must be a dictionary"
         if self.current_user.level < 100:
             raise AuthException("The current user is not authorized to ")
         if username in self._store.users:
             raise AAAException("User is already existing.")
         if role not in self._store.roles:
             raise AAAException("Nonexistent user role.")
-        tstamp = str(datetime.utcnow())
+        tstamp = int(time())
         self._store.users[username] = {
             'role': role,
             'hash': self._hash(username, password),
             'email_addr': email_addr,
-            'desc': description,
+            'company': company,
+            'perm': permissions,
+            'validated': True,
             'creation_date': tstamp
         }
 
@@ -429,7 +441,7 @@ class Cork(object):
         """
         for un in sorted(self._store.users):
             d = self._store.users[un]
-            yield (un, d['role'], d['email_addr'], d['desc'])
+            yield (un, d['validated'], d['role'], d['email_addr'], d['company'], d['perm'])
 
     @property
     def current_user(self):
@@ -455,10 +467,10 @@ class Cork(object):
             return User(username, self)
         return None
 
-    def register(self, username, password, email_addr, role='user',
+    def register(self, username, password, email_addr, company, role='user',
         max_level=50, subject="Signup confirmation",
         email_template='views/registration_email.tpl',
-        description=None):
+        permissions={}):
         """Register a new user account. An email with a registration validation
         is sent to the user.
         WARNING: this method is available to unauthenticated users
@@ -477,13 +489,15 @@ class Cork(object):
         :type subject: str.
         :param email_template: email template filename
         :type email_template: str.
-        :param description: description (free form)
-        :type description: str.
+        :param permissions: dictionary of granted permissions
+        :type permissions: dict
         :raises: AssertError or AAAException on errors
         """
         assert username, "Username must be provided."
         assert password, "A password must be provided."
         assert email_addr, "An email address must be provided."
+        assert company, "An company must be provided."
+        assert isinstance(permissions, dict), "Permissions must be a dictionary"
         if username in self._store.users:
             raise AAAException("User is already existing.")
         if role not in self._store.roles:
@@ -492,12 +506,13 @@ class Cork(object):
             raise AAAException("Unauthorized role")
 
         registration_code = uuid.uuid4().hex
-        creation_date = str(datetime.utcnow())
+        creation_date = int(time())
 
         # send registration email
         email_text = bottle.template(email_template,
             username=username,
             email_addr=email_addr,
+            company=company,
             role=role,
             creation_date=creation_date,
             registration_code=registration_code
@@ -510,7 +525,8 @@ class Cork(object):
             'role': role,
             'hash': self._hash(username, password),
             'email_addr': email_addr,
-            'desc': description,
+            'company': company,
+            'perm': permissions,
             'creation_date': creation_date,
         }
 
@@ -536,9 +552,12 @@ class Cork(object):
             'role': data['role'],
             'hash': data['hash'],
             'email_addr': data['email_addr'],
-            'desc': data['desc'],
+            'company': data['company'],
+            'perm': data['perm'],
+            'validated': False,
             'creation_date': data['creation_date']
         }
+        return username
 
     def send_password_reset_email(self, username=None, email_addr=None,
         subject="Password reset confirmation",
@@ -675,10 +694,9 @@ class Cork(object):
         :type exp_time: float.
         """
         for uuid, data in self._store.pending_registrations.items():
-            creation = datetime.strptime(data['creation_date'],
-                "%Y-%m-%d %H:%M:%S.%f")
-            now = datetime.utcnow()
-            maxdelta = timedelta(hours=exp_time)
+            creation = data['creation_date']
+            now = int(time())
+            maxdelta = (exp_time*60*60)
             if now - creation > maxdelta:
                 self._store.pending_registrations.pop(uuid)
 
@@ -711,7 +729,8 @@ class User(object):
         self._cork = cork_obj
         assert username in self._cork._store.users, "Unknown user"
         self.username = username
-        self.role = self._cork._store.users[username]['role']
+        self.info = self._cork._store.users[username]
+        self.role = self.info['role']
         self.level = self._cork._store.roles[self.role]["level"]
 
         if session is not None:
@@ -722,7 +741,7 @@ class User(object):
             except:
                 pass
     
-    def update(self, role=None, pwd=None, email_addr=None):
+    def update(self, role=None, pwd=None, email_addr=None, validated=None, permissions=None):
         """Update an user account data
 
         :param role: change user role, if specified
@@ -731,6 +750,8 @@ class User(object):
         :type pwd: str.
         :param email_addr: change user email address, if specified
         :type email_addr: str.
+        :param permissions: add to user permissions, if specified
+        :type permissions: dict
         :raises: AAAException on nonexistent user or role.
         """
         username = self.username
@@ -747,7 +768,13 @@ class User(object):
             user_obj['hash'] = self._cork._hash(username, pwd)
         if email_addr is not None:
             user_obj['email'] = email_addr
+        if permissions is not None:
+            assert isinstance(permissions, dict), "Permissions must be a dictionary"
+            user_obj['perm'].update(permissions)
+        if validated is not None:
+            user_obj['validated'] = True
             
+        self.info = user_obj
         self._cork._store.users[username] = user_obj
 
     def delete(self):
