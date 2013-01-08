@@ -732,7 +732,7 @@ class User(object):
         self.info = self._cork._store.users[username]
         self.company = self.info['company']
         self.permissions = self.info['perm']
-        self.email = self.info['email']
+        self.email_addr = self.info['email_addr']
         self.role = self.info['role']
         self.level = self._cork._store.roles[self.role]["level"]
 
@@ -770,7 +770,7 @@ class User(object):
         if pwd is not None:
             user_obj['hash'] = self._cork._hash(username, pwd)
         if email_addr is not None:
-            user_obj['email'] = email_addr
+            user_obj['email_addr'] = email_addr
         if permissions is not None:
             assert isinstance(permissions, dict), "Permissions must be a dictionary"
             user_obj['perm'].update(permissions)
