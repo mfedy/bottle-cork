@@ -161,8 +161,8 @@ class CouchbaseTable(dict):
     
 class CouchbaseBackend(object):
 
-    def __init__(self, db_host='localhost',  db_password='', db_bucket='default', users_table_name='Users',
-            roles_table_name='Roles', pending_reg_table_name='Register'):
+    def __init__(self, db_host='localhost',  db_password='', db_bucket='default', users_table_name='User',
+            roles_table_name='Role', pending_reg_table_name='Register'):
         """Data storage class. Handles JSON Docs in Couchbase
 
         :param db_host: hostname of couchbase server to use
@@ -187,7 +187,7 @@ class CouchbaseBackend(object):
 class Cork(object):
 
     def __init__(self, email_sender=None, db_host='localhost', db_password='', db_bucket='default', 
-        users_table_name='Users', roles_table_name='Roles', pending_reg_table_name='Register',
+        users_table_name='User', roles_table_name='Role', pending_reg_table_name='Register',
         session_domain=None, smtp_url='localhost', smtp_server=None):
         """Auth/Authorization/Accounting class
 
