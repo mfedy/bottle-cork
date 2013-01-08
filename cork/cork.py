@@ -161,8 +161,8 @@ class CouchbaseTable(dict):
     
 class CouchbaseBackend(object):
 
-    def __init__(self, db_host='localhost',  db_password='', db_bucket='default', users_table_name='__Users',
-            roles_table_name='__Roles', pending_reg_table_name='__Register'):
+    def __init__(self, db_host='localhost',  db_password='', db_bucket='default', users_table_name='Users',
+            roles_table_name='Roles', pending_reg_table_name='Register'):
         """Data storage class. Handles JSON Docs in Couchbase
 
         :param db_host: hostname of couchbase server to use
@@ -187,7 +187,7 @@ class CouchbaseBackend(object):
 class Cork(object):
 
     def __init__(self, email_sender=None, db_host='localhost', db_password='', db_bucket='default', 
-        users_table_name='__Users', roles_table_name='__Roles', pending_reg_table_name='__Register',
+        users_table_name='Users', roles_table_name='Roles', pending_reg_table_name='Register',
         session_domain=None, smtp_url='localhost', smtp_server=None):
         """Auth/Authorization/Accounting class
 
@@ -730,6 +730,9 @@ class User(object):
         assert username in self._cork._store.users, "Unknown user"
         self.username = username
         self.info = self._cork._store.users[username]
+        self.company = self.info['company']
+        self.permissions = self.info['perm']
+        self.email = self.info['email']
         self.role = self.info['role']
         self.level = self._cork._store.roles[self.role]["level"]
 
@@ -741,7 +744,7 @@ class User(object):
             except:
                 pass
     
-    def update(self, role=None, pwd=None, email_addr=None, validated=None, permissions=None):
+    def update(self, role=None, pwd=None, email_addr=None, validated=None, permissions=None, company=None):
         """Update an user account data
 
         :param role: change user role, if specified
@@ -773,6 +776,8 @@ class User(object):
             user_obj['perm'].update(permissions)
         if validated is not None:
             user_obj['validated'] = True
+        if company is not None:
+            user_obj['company'] = company
             
         self.info = user_obj
         self._cork._store.users[username] = user_obj
