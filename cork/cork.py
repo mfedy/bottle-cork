@@ -56,7 +56,7 @@ except ImportError:  # pragma: no cover
 
 log = getLogger(__name__)
 
-COUCHBASE_ENTRY_VIEW = "_design/dev_test/_view/all_keys"
+COUCHBASE_ENTRY_VIEW = "_design/dev_test/_view/keys_by_table
 
 class AAAException(Exception):
     """Generic Authentication/Authorization Exception"""
@@ -730,11 +730,7 @@ class User(object):
         assert username in self._cork._store.users, "Unknown user"
         self.username = username
         self.info = self._cork._store.users[username]
-        self.company = self.info['company']
-        self.permissions = self.info['perm']
-        self.email_addr = self.info['email_addr']
-        self.role = self.info['role']
-        self.level = self._cork._store.roles[self.role]["level"]
+        self.__load_attributes()
 
         if session is not None:
             try:
@@ -743,6 +739,13 @@ class User(object):
                 self.session_id = session['_id']
             except:
                 pass
+        
+    def __load_attributes(self):
+        self.company = self.info['company']
+        self.permissions = self.info['perm']
+        self.email_addr = self.info['email_addr']
+        self.role = self.info['role']
+        self.level = self._cork._store.roles[self.role]["level"]
     
     def update(self, role=None, pwd=None, email_addr=None, validated=None, permissions=None, company=None):
         """Update an user account data
@@ -780,6 +783,7 @@ class User(object):
             user_obj['company'] = company
             
         self.info = user_obj
+        self.__load_attributes()
         self._cork._store.users[username] = user_obj
 
     def delete(self):
