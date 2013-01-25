@@ -56,7 +56,7 @@ except ImportError:  # pragma: no cover
 
 log = getLogger(__name__)
 
-COUCHBASE_ENTRY_VIEW = "_design/dev_test/_view/keys_by_table
+COUCHBASE_ENTRY_VIEW = "_design/dev_test/_view/keys_by_table"
 
 class AAAException(Exception):
     """Generic Authentication/Authorization Exception"""
