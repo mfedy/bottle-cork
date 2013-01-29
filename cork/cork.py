@@ -744,6 +744,7 @@ class User(object):
         self.company = self.info['company']
         self.permissions = self.info['perm']
         self.email_addr = self.info['email_addr']
+        self.permissions = self.info["perm"]
         self.role = self.info['role']
         self.level = self._cork._store.roles[self.role]["level"]
     
@@ -782,6 +783,31 @@ class User(object):
         if company is not None:
             user_obj['company'] = company
             
+        self.info = user_obj
+        self.__load_attributes()
+        self._cork._store.users[username] = user_obj
+        
+    def remove_permissions(self, permissions):
+        """Remove permissions from a user account data
+
+        :param permissions: removed permissions from user
+        :type permissions: list
+        :raises: AAAException on nonexistent user or role.
+        """
+        assert isinstance(permissions, list), "Permissions must be list"
+        
+        username = self.username
+        if username not in self._cork._store.users:
+            raise AAAException("User does not exist.")
+        
+        user_obj = self._cork._store.users[username]
+        
+        for perm in permissions:
+            try:
+                del user_obj["perm"][perm]
+            except:
+                pass
+        
         self.info = user_obj
         self.__load_attributes()
         self._cork._store.users[username] = user_obj
