@@ -469,8 +469,7 @@ class Cork(object):
 
     def register(self, username, password, email_addr, company, role='user',
         max_level=50, subject="Signup confirmation",
-        email_template='views/registration_email.tpl',
-        permissions={}):
+        email_template=None, permissions={}):
         """Register a new user account. An email with a registration validation
         is sent to the user.
         WARNING: this method is available to unauthenticated users
@@ -508,16 +507,17 @@ class Cork(object):
         registration_code = uuid.uuid4().hex
         creation_date = int(time())
 
-        # send registration email
-        email_text = bottle.template(email_template,
-            username=username,
-            email_addr=email_addr,
-            company=company,
-            role=role,
-            creation_date=creation_date,
-            registration_code=registration_code
-        )
-        self.mailer.send_email(email_addr, subject, email_text)
+        if email_template:
+            # send registration email
+            email_text = bottle.template(email_template,
+                username=username,
+                email_addr=email_addr,
+                company=company,
+                role=role,
+                creation_date=creation_date,
+                registration_code=registration_code
+            )
+            self.mailer.send_email(email_addr, subject, email_text)
 
         # store pending registration
         self._store.pending_registrations[registration_code] = {
@@ -530,6 +530,7 @@ class Cork(object):
             'creation_date': creation_date,
         }
 
+        return registration_code
 
     def validate_registration(self, registration_code):
         """Validate pending account registration, create a new account if
