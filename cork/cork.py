@@ -120,7 +120,7 @@ class CouchbaseTable(dict):
         return json.loads(value)
 
     def _get_keys(self):
-        values = self.client.view(COUCHBASE_ENTRY_VIEW, key=self.table_name)
+        values = self.client.view(COUCHBASE_ENTRY_VIEW, key=self.table_name, reduce=False)
         return values
     
     def __iter__(self):
