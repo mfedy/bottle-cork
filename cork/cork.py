@@ -45,8 +45,7 @@ import re
 import shutil
 import uuid
 
-from couchbase.client import Couchbase
-from couchbase.exception import MemcachedError
+import couchbase
 
 try:
     import json
@@ -56,7 +55,8 @@ except ImportError:  # pragma: no cover
 
 log = getLogger(__name__)
 
-COUCHBASE_ENTRY_VIEW = "_design/dev_test/_view/keys_by_table"
+COUCHBASE_ENTRY_DESIGN_DOC = "admin"
+COUCHBASE_ENTRY_VIEW = "keys_by_table"
 
 class AAAException(Exception):
     """Generic Authentication/Authorization Exception"""
@@ -70,7 +70,7 @@ class AuthException(AAAException):
 class CouchbaseTable(dict):
     def __init__(self, client, table_name):
         """ Wrapper class to manage a table of couchbase entries
-        
+
         :param client: couchbase client
         :type client: couchbase.Bucket
         :param table_name: the name (aka prefix) of the table entries
@@ -78,90 +78,90 @@ class CouchbaseTable(dict):
         """
         self.client = client
         self.table_name = table_name
-        
+
     def _get_entry_key(self, item):
         return "%s:%s" % (self.table_name, item)
-        
+
     def __contains__(self, item):
         try:
-            _, _, value = self.client.get(self._get_entry_key(item))
-        except MemcachedError:
+            result = self.client.get(self._get_entry_key(item))
+        except:
             return False
 
-        return value is not None
-    
+        return result.value is not None
+
     def __getitem__(self, item):
         try:
-            _, _, value = self.client.get(self._get_entry_key(item))
-        except MemcachedError, e:
+            result = self.client.get(self._get_entry_key(item))
+        except:
             raise KeyError()
 
-        return json.loads(value)
-    
+        return result.value
+
     def __setitem__(self, key, value):
         try:
-            self.client.set(self._get_entry_key(key), 0, 0, json.dumps(value))
+            self.client.set(self._get_entry_key(key), value)
         except:
             pass
-            
+
     def __delitem__(self, item):
         try:
             self.client.delete(self._get_entry_key(item))
-        except MemcachedError:
+        except:
             pass
-            
+
     def pop(self, item):
         try:
-            _, _, value = self.client.get(self._get_entry_key(item))
+            result = self.client.get(self._get_entry_key(item))
             self.client.delete(self._get_entry_key(item))
-        except MemcachedError:
+        except:
             raise KeyError()
 
-        return json.loads(value)
+        return result.value
 
-    def _get_keys(self):
-        values = self.client.view(COUCHBASE_ENTRY_VIEW, key=self.table_name, reduce=False)
+    def _get_keys(self, include_docs=False):
+        values = self.client.query(COUCHBASE_ENTRY_DESIGN_DOC, COUCHBASE_ENTRY_VIEW, key=self.table_name, include_docs=include_docs, reduce=False)
         return values
-    
+
     def __iter__(self):
         values = self._get_keys()
         for item in values:
-            yield item["value"].__str__()
-        
+            yield item.key
+
     def __len__(self):
         values = self._get_keys()
         return len(values)
-    
+
     def items(self):
-        values = self._get_keys()
-        yield [(item["value"].__str__(), self.client.get(item["id"].__str__())[2]) for item in values]
-    
+        values = self._get_keys(include_docs=True)
+        yield [(item.key, item.doc.value) for item in values]
+
     def iteritems(self, *args, **kwargs):
-        values = self._get_keys()
+        values = self._get_keys(include_docs=True)
         for item in values:
-            yield item["value"].__str__(), self.client.get(item["id"].__str__())[2]
-            
+            yield item.key, item.doc.value
+
     def keys(self):
         values = self._get_keys()
-        yield [item["value"].__str__() for item in values]
-        
+        yield [item.key for item in values]
+
     def iterkeys(self):
         values = self._get_keys()
         for item in values:
-            yield item["value"].__str__()
-            
+            yield item.key
+
     def values(self):
-        values = self._get_keys()
-        yield [self.client.get(item["id"].__str__())[2] for item in values]
-        
+        values = self._get_keys(include_docs=True)
+        yield [item.doc.value for item in values]
+
     def itervalues(self):
-        values = self._get_keys()
+        values = self._get_keys(include_docs=True)
         for item in values:
-            yield self.client.get(item["id"].__str__())[2]
-    
+            yield item.doc.value
+
 class CouchbaseBackend(object):
 
-    def __init__(self, db_host='localhost',  db_password='', db_bucket='default', users_table_name='User',
+    def __init__(self, db_host='localhost', db_password='', db_bucket='default', users_table_name='User',
             roles_table_name='Role', pending_reg_table_name='Register'):
         """Data storage class. Handles JSON Docs in Couchbase
 
@@ -178,7 +178,7 @@ class CouchbaseBackend(object):
         :param pending_reg_table_name: prefix for pending registration keys
         :type pending_reg_table_name: str.
         """
-        client = Couchbase(db_host, db_bucket, db_password)[db_bucket]
+        client = couchbase.Couchbase.connect(host=db_host, bucket=db_bucket, username=db_bucket, password=db_password)
         self.users = CouchbaseTable(client, users_table_name)
         self.roles = CouchbaseTable(client, roles_table_name)
         self.pending_registrations = CouchbaseTable(client, pending_reg_table_name)
@@ -186,7 +186,7 @@ class CouchbaseBackend(object):
 
 class Cork(object):
 
-    def __init__(self, email_sender=None, db_host='localhost', db_password='', db_bucket='default', 
+    def __init__(self, email_sender=None, db_host='localhost', db_password='', db_bucket='default',
         users_table_name='User', roles_table_name='Role', pending_reg_table_name='Register',
         session_domain=None, smtp_url='localhost', smtp_server=None):
         """Auth/Authorization/Accounting class
@@ -207,7 +207,7 @@ class Cork(object):
         if smtp_server:
             smtp_url = smtp_server
         self.mailer = Mailer(email_sender, smtp_url)
-        self._store = CouchbaseBackend(db_host, db_password, db_bucket, users_table_name, 
+        self._store = CouchbaseBackend(db_host, db_password, db_bucket, users_table_name,
                                        roles_table_name, pending_reg_table_name)
         self.password_reset_timeout = 3600 * 24
         self.session_domain = session_domain
@@ -309,7 +309,7 @@ class Cork(object):
                         username""")
                 else:
                     bottle.redirect(fail_redirect)
-                    
+
         if company is not None and cu.level < 200:
             if cu.info["company"] != company:
                 if fail_redirect is None:
@@ -591,7 +591,7 @@ class Cork(object):
                     break
                 raise AAAException("Email address not found.")
 
-        else: # username is provided
+        else:  # username is provided
             if username not in self._store.users:
                 raise AAAException("Nonexistent user.")
             if email_addr is None:
@@ -640,7 +640,7 @@ class Cork(object):
             raise AAAException("Nonexistent user.")
         user.update(pwd=password)
 
-    ## Private methods
+    # # Private methods
 
     @property
     def _beaker_session(self):
@@ -682,8 +682,8 @@ class Cork(object):
         """
         decoded = b64decode(salted_hash)
         hash_type = decoded[0]
-        if hash_type != 'p': # 'p' for PBKDF2
-            return False # Only PBKDF2 is supported
+        if hash_type != 'p':  # 'p' for PBKDF2
+            return False  # Only PBKDF2 is supported
 
         salt = decoded[1:33]
         return cls._hash(username, pwd, salt) == salted_hash
@@ -697,7 +697,7 @@ class Cork(object):
         for uuid, data in self._store.pending_registrations.items():
             creation = data['creation_date']
             now = int(time())
-            maxdelta = (exp_time*60*60)
+            maxdelta = (exp_time * 60 * 60)
             if now - creation > maxdelta:
                 self._store.pending_registrations.pop(uuid)
 
@@ -740,7 +740,7 @@ class User(object):
                 self.session_id = session['_id']
             except:
                 pass
-        
+
     def __load_attributes(self):
         self.company = self.info['company']
         self.permissions = self.info['perm']
@@ -748,7 +748,7 @@ class User(object):
         self.permissions = self.info["perm"]
         self.role = self.info['role']
         self.level = self._cork._store.roles[self.role]["level"]
-    
+
     def update(self, role=None, pwd=None, email_addr=None, validated=None, permissions=None, company=None):
         """Update an user account data
 
@@ -765,9 +765,9 @@ class User(object):
         username = self.username
         if username not in self._cork._store.users:
             raise AAAException("User does not exist.")
-        
+
         user_obj = self._cork._store.users[username]
-        
+
         if role is not None:
             if role not in self._cork._store.roles:
                 raise AAAException("Nonexistent role.")
@@ -783,11 +783,11 @@ class User(object):
             user_obj['validated'] = True
         if company is not None:
             user_obj['company'] = company
-            
+
         self.info = user_obj
         self.__load_attributes()
         self._cork._store.users[username] = user_obj
-        
+
     def remove_permissions(self, permissions):
         """Remove permissions from a user account data
 
@@ -796,19 +796,19 @@ class User(object):
         :raises: AAAException on nonexistent user or role.
         """
         assert isinstance(permissions, list), "Permissions must be list"
-        
+
         username = self.username
         if username not in self._cork._store.users:
             raise AAAException("User does not exist.")
-        
+
         user_obj = self._cork._store.users[username]
-        
+
         for perm in permissions:
             try:
                 del user_obj["perm"][perm]
             except:
                 pass
-        
+
         self.info = user_obj
         self.__load_attributes()
         self._cork._store.users[username] = user_obj
@@ -899,7 +899,7 @@ class Mailer(object):
         thread.start()
         self._threads.append(thread)
 
-    def _send(self, email_addr, msg): # pragma: no cover
+    def _send(self, email_addr, msg):  # pragma: no cover
         """Deliver an email using SMTP
 
         :param email_addr: recipient
