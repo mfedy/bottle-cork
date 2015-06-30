@@ -100,20 +100,20 @@ class CouchbaseTable(dict):
 
     def __setitem__(self, key, value):
         try:
-            self.client.set(self._get_entry_key(key), value)
+            self.client.upsert(self._get_entry_key(key), value)
         except:
             pass
 
     def __delitem__(self, item):
         try:
-            self.client.delete(self._get_entry_key(item))
+            self.client.remove(self._get_entry_key(item))
         except:
             pass
 
     def pop(self, item):
         try:
             result = self.client.get(self._get_entry_key(item))
-            self.client.delete(self._get_entry_key(item))
+            self.client.remove(self._get_entry_key(item))
         except:
             raise KeyError()
 
