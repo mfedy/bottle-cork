@@ -45,8 +45,6 @@ import re
 import shutil
 import uuid
 
-import couchbase
-
 try:
     import json
 except ImportError:  # pragma: no cover
@@ -178,7 +176,8 @@ class CouchbaseBackend(object):
         :param pending_reg_table_name: prefix for pending registration keys
         :type pending_reg_table_name: str.
         """
-        client = couchbase.Couchbase.connect(host=db_host, bucket=db_bucket, username=db_bucket, password=db_password)
+        from couchbase.bucket import Bucket
+        client = Bucket("couchbase://{0}/{1}".format(db_host, db_bucket) username=db_bucket, password=db_password)
         self.users = CouchbaseTable(client, users_table_name)
         self.roles = CouchbaseTable(client, roles_table_name)
         self.pending_registrations = CouchbaseTable(client, pending_reg_table_name)
