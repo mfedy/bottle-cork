@@ -639,6 +639,10 @@ class Cork(object):
             raise AAAException("Nonexistent user.")
         user.update(pwd=password)
 
+    def verify_password(self, username, password):
+        return self._verify_password(username, password,
+                    self._store.users[username]['hash'])
+
     # # Private methods
 
     @property
