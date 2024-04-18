@@ -66,15 +66,16 @@ class AuthException(AAAException):
     pass
 
 class CouchbaseTable(dict):
-    def __init__(self, client, table_name):
+    def __init__(self, bucket, table_name):
         """ Wrapper class to manage a table of couchbase entries
 
-        :param client: couchbase client
-        :type client: couchbase.Bucket
+        :param bucket: couchbase Bucket
+        :type bucket: couchbase.bucket.Bucket
         :param table_name: the name (aka prefix) of the table entries
         :type table_name: str.
         """
-        self.client = client
+        self.bucket = bucket
+        self.client = bucket.default_collection()
         self.table_name = table_name
 
     def _get_entry_key(self, item):
@@ -86,7 +87,7 @@ class CouchbaseTable(dict):
         except:
             return False
 
-        return result.value is not None
+        return result.content is not None
 
     def __getitem__(self, item):
         try:
@@ -94,7 +95,7 @@ class CouchbaseTable(dict):
         except:
             raise KeyError()
 
-        return result.value
+        return result.content
 
     def __setitem__(self, key, value):
         try:
@@ -115,11 +116,11 @@ class CouchbaseTable(dict):
         except:
             raise KeyError()
 
-        return result.value
+        return result.content
 
     def _get_keys(self, include_docs=False):
-        values = self.client.query(COUCHBASE_ENTRY_DESIGN_DOC, COUCHBASE_ENTRY_VIEW, key=self.table_name, include_docs=include_docs, reduce=False)
-        return values
+        view_values = self.bucket.view_query(COUCHBASE_ENTRY_DESIGN_DOC, COUCHBASE_ENTRY_VIEW, key=self.table_name, include_docs=include_docs, reduce=False)
+        return [view_value for view_value in view_values]
 
     def __iter__(self):
         values = self._get_keys()
@@ -132,12 +133,12 @@ class CouchbaseTable(dict):
 
     def items(self):
         values = self._get_keys(include_docs=True)
-        yield [(item.key, item.doc.value) for item in values]
+        yield [(item.key, item.document.value) for item in values]
 
     def iteritems(self, *args, **kwargs):
         values = self._get_keys(include_docs=True)
         for item in values:
-            yield item.key, item.doc.value
+            yield item.key, item.document.value
 
     def keys(self):
         values = self._get_keys()
@@ -150,12 +151,12 @@ class CouchbaseTable(dict):
 
     def values(self):
         values = self._get_keys(include_docs=True)
-        yield [item.doc.value for item in values]
+        yield [item.document.value for item in values]
 
     def itervalues(self):
         values = self._get_keys(include_docs=True)
         for item in values:
-            yield item.doc.value
+            yield item.document.value
 
 class CouchbaseBackend(object):
 
@@ -176,11 +177,13 @@ class CouchbaseBackend(object):
         :param pending_reg_table_name: prefix for pending registration keys
         :type pending_reg_table_name: str.
         """
-        from couchbase.bucket import Bucket
-        client = Bucket("couchbase://{0}/{1}".format(db_host, db_bucket), username=db_bucket, password=db_password)
-        self.users = CouchbaseTable(client, users_table_name)
-        self.roles = CouchbaseTable(client, roles_table_name)
-        self.pending_registrations = CouchbaseTable(client, pending_reg_table_name)
+        from couchbase.cluster import Cluster, ClusterOptions
+        from couchbase.auth import PasswordAuthenticator
+        cluster = Cluster('couchbase://{0}'.format(db_host), ClusterOptions(PasswordAuthenticator(db_bucket, db_password)))
+        bucket = cluster.bucket(db_bucket)
+        self.users = CouchbaseTable(bucket, users_table_name)
+        self.roles = CouchbaseTable(bucket, roles_table_name)
+        self.pending_registrations = CouchbaseTable(bucket, pending_reg_table_name)
 
 
 class Cork(object):
