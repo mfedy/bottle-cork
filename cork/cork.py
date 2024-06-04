@@ -119,7 +119,8 @@ class CouchbaseTable(dict):
         return result.content
 
     def _get_keys(self, include_docs=False):
-        view_values = self.bucket.view_query(COUCHBASE_ENTRY_DESIGN_DOC, COUCHBASE_ENTRY_VIEW, key=self.table_name, include_docs=include_docs, reduce=False)
+        from couchbase.options import ViewOptions
+        view_values = self.bucket.view_query(COUCHBASE_ENTRY_DESIGN_DOC, COUCHBASE_ENTRY_VIEW, ViewOptions(key=self.table_name, include_docs=include_docs, reduce=False))
         return [view_value for view_value in view_values]
 
     def __iter__(self):
@@ -177,7 +178,8 @@ class CouchbaseBackend(object):
         :param pending_reg_table_name: prefix for pending registration keys
         :type pending_reg_table_name: str.
         """
-        from couchbase.cluster import Cluster, ClusterOptions
+        from couchbase.cluster import Cluster
+        from couchbase.options import ClusterOptions
         from couchbase.auth import PasswordAuthenticator
         cluster = Cluster('couchbase://{0}'.format(db_host), ClusterOptions(PasswordAuthenticator(db_bucket, db_password)))
         bucket = cluster.bucket(db_bucket)
