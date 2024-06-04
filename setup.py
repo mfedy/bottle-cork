@@ -2,7 +2,7 @@
 
 from setuptools import setup
 
-__version__ = '0.5.2'
+__version__ = '0.5.3'
 
 CLASSIFIERS = map(str.strip,
 """Environment :: Console
@@ -30,7 +30,7 @@ setup(
     install_requires = [
         'bottle==0.11.6',
         'Beaker==1.8.0',
-        'couchbase==3.2.7',
+        'couchbase==4.0.5',
         'setuptools',
     ],
     packages = ['cork'],
