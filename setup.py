@@ -2,7 +2,7 @@
 
 from setuptools import setup
 
-__version__ = '0.5.3'
+__version__ = '0.5.10'
 
 CLASSIFIERS = map(str.strip,
 """Environment :: Console
@@ -26,11 +26,11 @@ setup(
     long_description = "Cork is a simple Authentication/Authorization library" \
         "for the Bottle web framework.",
     classifiers=CLASSIFIERS,
-    python_requires=">=3.5",
+    python_requires=">=3.10",
     install_requires = [
-        'bottle==0.11.6',
-        'Beaker==1.8.0',
-        'couchbase==4.0.5',
+        'bottle',
+        'Beaker',
+        'couchbase',
         'setuptools',
     ],
     packages = ['cork'],

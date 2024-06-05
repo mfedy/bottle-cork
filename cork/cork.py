@@ -86,8 +86,7 @@ class CouchbaseTable(dict):
             result = self.client.get(self._get_entry_key(item))
         except:
             return False
-
-        return result.content is not None
+        return result.content_as[dict] is not None
 
     def __getitem__(self, item):
         try:
@@ -95,7 +94,7 @@ class CouchbaseTable(dict):
         except:
             raise KeyError()
 
-        return result.content
+        return result.content_as[dict]
 
     def __setitem__(self, key, value):
         try:
@@ -116,12 +115,19 @@ class CouchbaseTable(dict):
         except:
             raise KeyError()
 
-        return result.content
+        return result.content_as[dict]
 
     def _get_keys(self, include_docs=False):
         from couchbase.options import ViewOptions
-        view_values = self.bucket.view_query(COUCHBASE_ENTRY_DESIGN_DOC, COUCHBASE_ENTRY_VIEW, ViewOptions(key=self.table_name, include_docs=include_docs, reduce=False))
-        return [view_value for view_value in view_values]
+        view_values = [v for v in self.bucket.view_query(COUCHBASE_ENTRY_DESIGN_DOC, COUCHBASE_ENTRY_VIEW, ViewOptions(key=self.table_name, reduce=False)).rows()]
+        # seems that couchbase sdk removed include_docs
+        if include_docs:
+            doc_ids = [r.id for r in view_values]
+            multi_response = self.client.get_multi(doc_ids)
+            multi_results = multi_response.results
+            for value in view_values:
+                value.document = multi_results[value.id]
+        return view_values
 
     def __iter__(self):
         values = self._get_keys()
@@ -134,12 +140,12 @@ class CouchbaseTable(dict):
 
     def items(self):
         values = self._get_keys(include_docs=True)
-        yield [(item.key, item.document.value) for item in values]
+        yield [(item.key, item.document.content_as[dict]) for item in values]
 
     def iteritems(self, *args, **kwargs):
         values = self._get_keys(include_docs=True)
         for item in values:
-            yield item.key, item.document.value
+            yield item.key, item.document.content_as[dict]
 
     def keys(self):
         values = self._get_keys()
@@ -152,12 +158,12 @@ class CouchbaseTable(dict):
 
     def values(self):
         values = self._get_keys(include_docs=True)
-        yield [item.document.value for item in values]
+        yield [item.document.content_as[dict] for item in values]
 
     def itervalues(self):
         values = self._get_keys(include_docs=True)
         for item in values:
-            yield item.document.value
+            yield item.document.content_as[dict]
 
 class CouchbaseBackend(object):
 
@@ -675,12 +681,12 @@ class Cork(object):
         assert len(salt) == 32, "Incorrect salt length"
 
         cleartext = "%s\0%s" % (username, pwd)
-        h = crypto.generateCryptoKeys(cleartext, salt, 10)
+        h = crypto.generateCryptoKeys(cleartext, salt, 10, 32)
         if len(h) != 32:
             raise RuntimeError("The PBKDF2 hash is not 32bytes long")
 
         # 'p' for PBKDF2
-        return b64encode('p' + salt + h)
+        return b64encode(b'p' + salt + h).decode("utf-8")
 
     @classmethod
     def _verify_password(cls, username, pwd, salted_hash):
@@ -689,7 +695,7 @@ class Cork(object):
         :returns: bool
         """
         decoded = b64decode(salted_hash)
-        hash_type = decoded[0]
+        hash_type = chr(decoded[0])
         if hash_type != 'p':  # 'p' for PBKDF2
             return False  # Only PBKDF2 is supported
 
